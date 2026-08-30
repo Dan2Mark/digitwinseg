@@ -1,6 +1,7 @@
 using CesiumForUnity;
 using System.Collections;
 using System.Collections.Generic;
+using System.Linq;
 using UnityEngine;
 using UnityEngine.InputSystem;
 using UnityEngine.UIElements.Experimental;
@@ -38,6 +39,8 @@ public class AllignmentManager : MonoBehaviour
     [SerializeField] public EvaluationManager _evaluationManager;
     [SerializeField] public LocationManager _LocationManager;
     [SerializeField] public GPSConnector _GPSConnector;
+    [SerializeField] public CameraAlignmentManager _cameraAlignmentManager;
+    
 
     private Vector3 _pureJoystickOffsetMeters = Vector3.zero;
     private float _buttonRotationDirection = 0f;
@@ -45,6 +48,7 @@ public class AllignmentManager : MonoBehaviour
     private bool isRotatesManually = false;
     private float _rotationOffset = 0f;
     private float _capturedCompassHeading = 0f;
+    private CameraAlignmentManager.CameraPose _cameraAlignmentOffset = new();
 
     private float _efficiency;
 
@@ -96,6 +100,7 @@ public class AllignmentManager : MonoBehaviour
             rotationMutiplier = 0.01f;
         }
     }
+    private bool isCesiumLoaded = false;
     IEnumerator WaitCesiumLoading()
     {   if (_tileset != null)
         {
@@ -103,6 +108,7 @@ public class AllignmentManager : MonoBehaviour
             while (loaded < 90f)
             {
                 loaded = _tileset.ComputeLoadProgress();
+                if (loaded > 50f) isCesiumLoaded = true;
                 Debugger.DisplayProgressBar("Cesium Loading", (int)loaded, 100);
                 yield return new WaitForSeconds(1.0f);
             }
@@ -112,6 +118,7 @@ public class AllignmentManager : MonoBehaviour
     IEnumerator LocationAlignmentRoutine()
     {
         Debugger.Log("Position reset. Starting GPS allignment...");
+        isCesiumLoaded = false;
         StartCoroutine(WaitCesiumLoading());
         float _efficiencyStartTime = Time.time;
 
@@ -160,9 +167,28 @@ public class AllignmentManager : MonoBehaviour
         }
 
         _efficiency = Time.time - _efficiencyStartTime;
+        yield return new WaitUntil(() => isCesiumLoaded);
         Debugger.Log($"GPS allignment complite! Took {(_efficiency):F2} seconds.", Debugger.MsgType.Success);
         _LocationManager.deactivateLocation();
+        
     }
+
+    public void AlignWithCamera()
+    {
+        StartCoroutine(CameraAlignment());
+    }
+    public IEnumerator CameraAlignment()
+    {
+        bool isAligned = false;
+        StartCoroutine(_cameraAlignmentManager.Align(callback =>
+        {
+            _cameraAlignmentOffset = callback;
+            setPosition();
+            setRotation();
+            isAligned = true;
+        }));
+        yield return new WaitUntil(() => isAligned);
+    } 
 
     public void StartRotateLeft()
     {
@@ -237,11 +263,11 @@ public class AllignmentManager : MonoBehaviour
     }
     private void setPosition()
     {
-        _positionOffsetTransform.position = _cityPosition - _pureJoystickOffsetMeters;
+        _positionOffsetTransform.position = _cityPosition - _pureJoystickOffsetMeters + _cameraAlignmentOffset.position;
     }
     private void setRotation()
     {
-        float angle = _capturedCompassHeading - _rotationOffset + _arCameraTransform.rotation.y;
+        float angle = _capturedCompassHeading - _rotationOffset + _arCameraTransform.rotation.y + _cameraAlignmentOffset.ry;
         Quaternion rot = Quaternion.Euler(0f, angle, 0f);
         _rotationOffsetTransform.rotation = rot;
     }
