@@ -6,6 +6,7 @@
 [Ll]ogs/
 [Mm]emoryCaptures/
 UserSettings/
+APKs/
 Packages/com.unity.package-manager-ui/
 *.csproj
 *.unityproj
