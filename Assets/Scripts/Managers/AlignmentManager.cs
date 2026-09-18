@@ -48,7 +48,7 @@ public class AllignmentManager : MonoBehaviour
     private bool isRotatesManually = false;
     private float _rotationOffset = 0f;
     private float _capturedCompassHeading = 0f;
-    private CameraAlignmentManager.CameraPose _cameraAlignmentOffset = new();
+    private CameraAlignmentManager.CameraPose _cameraAlignmentOffset = new CameraAlignmentManager.CameraPose(Vector3.zero, new Quaternion(0,0,0,0));
 
     private float _efficiency;
 
@@ -58,8 +58,8 @@ public class AllignmentManager : MonoBehaviour
     {
         if (_positionOffsetTransform != null && _rotationOffsetTransform != null)
         {
-            Debugger.DisplayVar("rot", () => _rotationOffsetTransform.rotation.eulerAngles.y.ToString("F1") + "°");
-            Debugger.DisplayVector("pos", () => _positionOffsetTransform.position);
+            //Debugger.DisplayVar("rot", () => _rotationOffsetTransform.rotation.eulerAngles.y.ToString("F1") + "°");
+            //Debugger.DisplayVector("pos", () => _positionOffsetTransform.position);
         }
         else
             Debugger.Log("Missed rotationOffset or positionOffset in AllignmentManeger", Debugger.MsgType.Error);
@@ -102,16 +102,19 @@ public class AllignmentManager : MonoBehaviour
     }
     private bool isCesiumLoaded = false;
     IEnumerator WaitCesiumLoading()
-    {   if (_tileset != null)
+    {   
+        isCesiumLoaded = false;
+        if (_tileset != null)
         {
             float loaded = 0;
-            while (loaded < 90f)
+            while (loaded < 100f)
             {
                 loaded = _tileset.ComputeLoadProgress();
-                if (loaded > 50f) isCesiumLoaded = true;
+                if (loaded > 95) isCesiumLoaded = true;
                 Debugger.DisplayProgressBar("Cesium Loading", (int)loaded, 100);
                 yield return new WaitForSeconds(1.0f);
             }
+            isCesiumLoaded = true;
             Debugger.HideProgressBar("Cesium Loading");
         }
     }
@@ -119,7 +122,6 @@ public class AllignmentManager : MonoBehaviour
     {
         Debugger.Log("Position reset. Starting GPS allignment...");
         isCesiumLoaded = false;
-        StartCoroutine(WaitCesiumLoading());
         float _efficiencyStartTime = Time.time;
 
         bool _activateLocationCallbackRecieved = false;
@@ -158,18 +160,24 @@ public class AllignmentManager : MonoBehaviour
         if (distanceToTarget > _dummyThresholdKm)
         {
             ActivateDummyMode($"Too far ({distanceToTarget:F2} km). Forced Bamberg Center.", Debugger.MsgType.Warn);
+            _LocationManager.deactivateLocation();
         }
         else
         {
             _currentCords = new GPSConnector.Cords(deviceCords.lat, deviceCords.lon, deviceCords.alt); //save copy of gps cords
             Debugger.Log($"GPS linked successfull: ({deviceCords.lat}, {deviceCords.lon})", Debugger.MsgType.Success);
             MoveCityToCords(deviceCords);
+            _LocationManager.deactivateLocation();
         }
 
-        _efficiency = Time.time - _efficiencyStartTime;
+        yield return new WaitForSeconds(1.0f);
+        StartCoroutine(WaitCesiumLoading());
+        yield return new WaitForSeconds(0.5f);
         yield return new WaitUntil(() => isCesiumLoaded);
+        //AlignWithCamera();
+
+        _efficiency = Time.time - _efficiencyStartTime;
         Debugger.Log($"GPS allignment complite! Took {(_efficiency):F2} seconds.", Debugger.MsgType.Success);
-        _LocationManager.deactivateLocation();
         
     }
 
@@ -217,7 +225,7 @@ public class AllignmentManager : MonoBehaviour
         _rotationOffset = 0f;
         _pureJoystickOffsetMeters = Vector3.zero;
         StartCoroutine(LocationAlignmentRoutine());
-        StartCoroutine(RaycastLoopRoutine());
+        //StartCoroutine(RaycastLoopRoutine());
     }
 
     public void AcceptPosition()
@@ -239,14 +247,14 @@ public class AllignmentManager : MonoBehaviour
         _currentCords = new GPSConnector.Cords(_dummyLat, _dummyLon, 0);
         MoveCityToCords(_currentCords);
     }
-    
+    /*
     IEnumerator RaycastLoopRoutine() { while (true) { AdjustAltitudeByRaycast(); yield return new WaitForSeconds(1f); } }
 
     private Coroutine _raycastCoroutine;
     void OnEnable() { if (_alignToGround) _raycastCoroutine = StartCoroutine(RaycastLoopRoutine()); }
     void OnDisable() { if (_raycastCoroutine != null) StopCoroutine(_raycastCoroutine); }
-    
-    private void AdjustAltitudeByRaycast()
+*/   
+    private Vector3 AdjustAltitudeByRaycast(Vector3 position)
     {
         Vector3 rayOrigin = new Vector3(_arCameraTransform.position.x, _arCameraTransform.position.y + _raycastStartHeight, _arCameraTransform.position.z);
         Ray ray = new Ray(rayOrigin, Vector3.down);
@@ -256,14 +264,14 @@ public class AllignmentManager : MonoBehaviour
             float currentCameraHeightRelativeToRig = _arCameraTransform.position.y - _positionOffsetTransform.position.y;
             float targetRigY = hit.point.y - (-_cameraHeightAboveGround - currentCameraHeightRelativeToRig);
 
-            Vector3 targetPosition = _positionOffsetTransform.position;
-            _cityPosition.y = targetRigY;//Mathf.Lerp(_cityPosition.y, targetRigY, Time.deltaTime * _alignmentSmoothness);
-            _positionOffsetTransform.position = targetPosition;
+            position.y = targetRigY + _cameraAlignmentOffset.position.y;
         }
+        return position;
     }
     private void setPosition()
     {
-        _positionOffsetTransform.position = _cityPosition - _pureJoystickOffsetMeters + _cameraAlignmentOffset.position;
+        var newPosition = _cityPosition - _pureJoystickOffsetMeters + _cameraAlignmentOffset.position;
+        _positionOffsetTransform.position = AdjustAltitudeByRaycast(newPosition);
     }
     private void setRotation()
     {

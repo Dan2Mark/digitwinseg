@@ -6,12 +6,12 @@ public class SimilarityScoreEstimator : MonoBehaviour
     private static readonly float[,] WeightMatrix = new float[7, 7]
     {
         // sky   ground  build   roof    window  stairs  other
-        {  5f,    -5f,    -5f,   -5f,     -5f,    -5f,     0f }, // sky (0)
-        { -5f,     5f,    -5f,   -5f,     -5f,     5f,     0f }, // ground (1)
-        { -5f,    -5f,     5f,    3f,      3f,     2f,     0f }, // buildings (2)
-        { -5f,    -5f,     3f,    5f,      3f,    -5f,     0f }, // roof (3)
-        { -5f,    -5f,     3f,    3f,      5f,    -5f,     0f }, // window (4)
-        { -5f,     5f,     2f,   -5f,     -5f,     5f,     0f }, // stairs (5)
+        {  2f,    -60f,    -60f,   -9f,     -30f,    -5f,     0f }, // sky (0)
+        { -60f,     2f,    -30f,   -30f,     -30f,     1f,     0f }, // ground (1)
+        { -60f,    -30f,     2f,    1f,      1f,     1f,     0f }, // buildings (2)
+        { -30f,    -30f,     1f,    2f,      1f,    -5f,     0f }, // roof (3)
+        { -30f,    -30f,     1f,    1f,      5f,    -5f,     0f }, // window (4)
+        { -5f,     1f,     1f,   -5f,     -5f,     2f,     0f }, // stairs (5)
         {  0f,     0f,     0f,    0f,      0f,     0f,     0f }  // other (6)
     };
 
@@ -40,7 +40,7 @@ public class SimilarityScoreEstimator : MonoBehaviour
 
         double averageScore = (double)totalScore / length;
 
-        return normalize ? averageScore / 5.0f : averageScore;
+        return normalize ? averageScore / 60.0f : averageScore;
     }
 
 }

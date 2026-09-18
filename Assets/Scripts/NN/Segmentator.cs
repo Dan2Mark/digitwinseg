@@ -7,38 +7,17 @@ using UnityEngine.UI;
 public class Segmentator : MonoBehaviour
 {
     [Header("Model")][SerializeField] private ModelAsset modelAsset;
-    [Header("Display")] public RawImage displayImage; public bool enableDisplay = true;
 
     private Worker worker;
     private Model model;
-    private Texture2D displayTexture;
 
     private const int Size = 512, Pixels = Size * Size, Classes = 7;
-
-    private readonly Color32[] palette =
-    {
-        new(70,190,255,255), new(255,170,50,255), new(255,255,255,255),
-        new(255,0,0,255), new(0,50,255,255), new(255,0,255,255),
-        new(0,0,0,255)
-    };
 
     private void Awake()
     {
         model = ModelLoader.Load(modelAsset);
         worker = new Worker(model, BackendType.CPU);
 
-        if (enableDisplay)
-        {
-            displayTexture = new Texture2D(Size, Size, TextureFormat.RGBA32, false)
-            {
-                filterMode = FilterMode.Point,
-                wrapMode = TextureWrapMode.Clamp
-            };
-            displayTexture.SetPixels32(new Color32[Pixels]);
-            displayTexture.Apply();
-            displayImage.texture = displayTexture;
-            displayImage.enabled = true;
-        }
     }
 
     public byte[] RunSegmentation(Texture sourceTexture)
@@ -56,7 +35,7 @@ public class Segmentator : MonoBehaviour
             float[] data = outCpu.DownloadToArray();
 
             byte[] result = new byte[Pixels];
-            Color32[] displayPixels = enableDisplay ? new Color32[Pixels] : null;
+            
 
             for (int y = 0; y < Size; y++)
             {
@@ -83,26 +62,17 @@ public class Segmentator : MonoBehaviour
 
                     result[dstIndex] = (byte)best;
 
-                    if (enableDisplay)
-                        displayPixels[dstIndex] = palette[best];
+                    
                 }
             }
 
             outCpu.Dispose();
             inputTensor.Dispose();
             if (inputTexture != sourceTexture) Destroy(inputTexture);
-
-            if (enableDisplay)
-            {
-                displayTexture.SetPixels32(displayPixels);
-                displayTexture.Apply();
-            }
-
             return result;
         }
         catch (Exception e)
         {
-            Debugger.Log(e.Message);
             Debug.LogError("SENTIS ERROR:\n" + e);
             return null;
         }
@@ -167,6 +137,5 @@ public class Segmentator : MonoBehaviour
     private void OnDestroy()
     {
         worker?.Dispose();
-        if (displayTexture != null) Destroy(displayTexture);
     }
 }
