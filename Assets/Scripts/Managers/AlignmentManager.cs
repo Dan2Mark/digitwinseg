@@ -101,7 +101,7 @@ public class AllignmentManager : MonoBehaviour
         }
     }
     private bool isCesiumLoaded = false;
-    IEnumerator WaitCesiumLoading()
+    public IEnumerator WaitCesiumLoading()
     {   
         isCesiumLoaded = false;
         if (_tileset != null)
@@ -134,6 +134,12 @@ public class AllignmentManager : MonoBehaviour
         }));
 
         yield return new WaitUntil(() => _activateLocationCallbackRecieved);
+
+        if (!_isActivationSuccessful)
+        {
+            ActivateDummyMode("GPS activation failed. Forced Bamberg Center.", Debugger.MsgType.Error);
+            yield break;
+        }
 
         bool _getLocationCallbackRecieved = false;
         (GPSConnector.Cords deviceCords, bool isGPSfounded, float heading, bool isCompassAvailable) = _LocationManager.GetLocation();
@@ -216,16 +222,21 @@ public class AllignmentManager : MonoBehaviour
         _buttonRotationDirection = 0f;
     }
 
-    public void ResetPosition()
+    private void _Reset()
     {
         StopAllCoroutines();
+        _cameraAlignmentOffset.position = Vector3.zero;
         _evaluationManager.ResetMetrics();
         _capturedCompassHeading = 0f;
         _currentCords = null;
         _rotationOffset = 0f;
         _pureJoystickOffsetMeters = Vector3.zero;
+        _cameraAlignmentManager._Reset();
+    }
+    public void ResetPosition()
+    {
+        _Reset();
         StartCoroutine(LocationAlignmentRoutine());
-        //StartCoroutine(RaycastLoopRoutine());
     }
 
     public void AcceptPosition()
@@ -256,7 +267,7 @@ public class AllignmentManager : MonoBehaviour
 */   
     private Vector3 AdjustAltitudeByRaycast(Vector3 position)
     {
-        Vector3 rayOrigin = new Vector3(_arCameraTransform.position.x, _arCameraTransform.position.y + _raycastStartHeight, _arCameraTransform.position.z);
+        Vector3 rayOrigin = new Vector3(position.x, _arCameraTransform.position.y + _raycastStartHeight, position.z);
         Ray ray = new Ray(rayOrigin, Vector3.down);
         RaycastHit hit;
         if (Physics.Raycast(ray, out hit, _raycastStartHeight * 2, _groundLayerMask))
@@ -272,6 +283,7 @@ public class AllignmentManager : MonoBehaviour
     {
         var newPosition = _cityPosition - _pureJoystickOffsetMeters + _cameraAlignmentOffset.position;
         _positionOffsetTransform.position = AdjustAltitudeByRaycast(newPosition);
+        Debugger.DisplayVar("Inside Building", _cameraAlignmentManager.IsInsideBuilding(_positionOffsetTransform.position).ToString());
     }
     private void setRotation()
     {

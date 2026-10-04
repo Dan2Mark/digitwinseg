@@ -31,7 +31,6 @@ public class LocationManager : MonoBehaviour
             Permission.RequestUserPermission(Permission.FineLocation);
             yield return new WaitForSeconds(2.0f);
         }
-#endif
         Input.compass.enabled = true;
         Input.location.Start(1f, 1f);
 
@@ -53,9 +52,12 @@ public class LocationManager : MonoBehaviour
         yield return new WaitUntil(() => gpsConneptionCallbakRecived && compassConneptionCallbakRecived);
 
         bool isCompassAvailable = _compassConnector.ActivateCompass();
-
-        callback(isCompassAvailable && isGPSavailable);
-        
+      
+        callback(isCompassAvailable && isGPSavailable);  
+#elif UNITY_EDITOR
+        yield return null;
+        callback(false);
+#endif
     }
     public void deactivateLocation()
     {

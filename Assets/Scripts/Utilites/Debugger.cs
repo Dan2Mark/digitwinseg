@@ -1,8 +1,11 @@
 ﻿using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Runtime.InteropServices;
 using TMPro;
 using UnityEngine;
+using UnityEngine.Rendering;
+using UnityEngine.UIElements;
 
 public class Debugger : MonoBehaviour
 {
@@ -28,19 +31,21 @@ public class Debugger : MonoBehaviour
     public static int maxLines = MaxHistoryLines;
     static readonly List<string> logHistory = new();
     static readonly Dictionary<string, (object value, bool show)> vars = new();
-    static readonly Dictionary<string, float> progressBars = new();
+    static readonly Dictionary<string, object> progressBars = new();
+    static readonly Dictionary<string, object> valueBars = new();
+
     float headerHeight = 0;
     const int barLength = 10;
-    float collapsedHeight = 0;
+    float collapsedHeight;
 
-    string _stateString = "", _progressBar = "";
+    string _stateString = "", _progressBar = "", _valueBar = "";
     private string _devider = "";
     string devider { get { return _devider; } }
 
     readonly Queue<(string message, string stackTrace, LogType type)> logQueue = new();
     readonly object logLock = new();
 
-    public enum MsgType { Info, Warn, Error, Success }
+    public enum MsgType { Debug, Info, Warn, Error, Success }
 
     void Awake()
     {
@@ -71,10 +76,10 @@ public class Debugger : MonoBehaviour
         ProcessQueuedLogs();
         UpdateGestures();
         UpdateStateString();
-        UpdateProgressBar();
+        UpdateProgressBars();
+        UpdateValueBars();
         UpdateVisibleLogs();
     }
-
     void ProcessQueuedLogs()
     {
         lock (logLock)
@@ -90,6 +95,7 @@ public class Debugger : MonoBehaviour
         if (type == MsgType.Warn) msg = $"<color=#FFCB55>{msg}</color>";
         else if (type == MsgType.Error) msg = $"<color=#FF0000>{msg}</color>";
         else if (type == MsgType.Success) msg = $"<color=#55FFAA>{msg}</color>";
+        else if (type == MsgType.Info) msg = $"<color=#25D3FF>{msg}</color>";
 
         logHistory.AddRange(msg.Split('\n'));
         while (logHistory.Count > maxLines) logHistory.RemoveAt(0);
@@ -99,19 +105,41 @@ public class Debugger : MonoBehaviour
     void UpdateStateString() =>
         _stateString = string.Join("  ", vars.Where(v => v.Value.show).Select(v => $"<color=#FFAA55>{v.Key}:</color> {Format(v.Value.value)}"));
 
-    void UpdateProgressBar()
+    void UpdateProgressBars()
     {
         _progressBar = "";
         foreach (var p in progressBars)
         {
-            int filled = Mathf.RoundToInt(p.Value * barLength);
-            _progressBar += $"<color=#FFAA55>{p.Key}:</color> <color=#55FFAA>{new string('█', filled)}</color>{new string('░', barLength - filled)} {(int)(p.Value * 100)}%\n";
+            float value = (float)(p.Value is float ? p.Value : ((Func<float>)p.Value)());
+            int filled = Mathf.Clamp(Mathf.RoundToInt(value * barLength), 0, barLength);
+            _progressBar += $"<color=#FFAA55>{p.Key}:</color> <color=#55FFAA>{new string('█', filled)}</color><color=#555>{new string('░', barLength - filled)}</color> {(int)(value * 100)}%\t";
+        }
+    }
+    void UpdateValueBars()
+    {
+
+        _valueBar = "";
+        foreach (var p in valueBars)
+        {
+            ValueBar value = (ValueBar)(p.Value is ValueBar ? p.Value : ((Func<ValueBar>)p.Value)());
+            int filled = (int)Map(value.value,value.min,value.max,0,barLength);
+            /*var strV = Math.Round(value.value,2).ToString();
+            string bar = strV + "</color><color=#FFCB55>" + new string('_', Math.Max(0,barLength - strV.Length - filled)) + new string('█', Math.Max(0, Math.Max(barLength - strV.Length, barLength - filled)));
+            bar.Insert(filled, "</mark></color><color=#000><mark=#000>");
+            _valueBar += $"<color=#FFAA55>{p.Key}:</color><mark=#FFCB5588><color=#FFF> {bar}</mark></color>\t";
+            */
+            _valueBar += $"<color=#FFAA55>{p.Key}:</color> <color=#FFCB55>{new string('█', filled)}</color><color=#555>{new string('░', barLength - filled)}</color> {Math.Round(value.value,2)}\t";
         }
     }
 
     void UpdateVisibleLogs()
     {
-        if (textTMP == null || collapsed) return;
+        if (textTMP == null || collapsed)
+        {
+            textTMP.text = "<align=center><color=#555>Debug</color>    <b>▲</b>    <color=#555> Open</color></align>\n" +  (progressBars.Count > 0 ? devider : "") + _progressBar + ((valueBars.Count > 0 && progressBars.Count > 0) ? "\n" + devider : "" ) + _valueBar;
+            return;
+        }
+            
 
         float width = textTMP.rectTransform.rect.width;
         float height = textTMP.rectTransform.rect.height;
@@ -120,7 +148,8 @@ public class Debugger : MonoBehaviour
             "<align=center><color=#DDD>Debug</color>    <b>▼</b>    <color=#DDD>Close</color></align>\n" + devider + 
 
             $"{_stateString}\n" + devider + 
-            (progressBars.Count > 0 ? _progressBar + devider : "");
+            (progressBars.Count > 0 ? _progressBar + "\n" + devider : "") +
+            (valueBars.Count > 0 ? _valueBar + "\n" + devider : "");
 
         headerHeight = textTMP.GetPreferredValues(header, width, 0).y;
         float availableHeight = Mathf.Max(0, height - headerHeight);
@@ -212,7 +241,6 @@ public class Debugger : MonoBehaviour
                 debuggerCanvas.anchoredPosition.x,
                 openedY - hiddenHeight
             );
-            textTMP.text = "<align=center><color=#555>Debug</color>    <b>▲</b>    <color=#555> Open</color></align>";
             headerHeight = 0;
             collapsedHeight = textTMP.GetPreferredValues(
                 "^",
@@ -375,7 +403,7 @@ public class Debugger : MonoBehaviour
     static string Format(object v) =>
         v is Func<string> f ? f() : v?.ToString() ?? "null";
 
-    public static void Log(string msg, MsgType type = MsgType.Info)
+    public static void Log(string msg, MsgType type = MsgType.Debug)
     {
         if (Instance != null)
         {
@@ -386,6 +414,7 @@ public class Debugger : MonoBehaviour
         if (type == MsgType.Warn) msg = $"<color=#FFCB55>{msg}</color>";
         else if (type == MsgType.Error) msg = $"<color=#FF0000>{msg}</color>";
         else if (type == MsgType.Success) msg = $"<color=#55FFAA>{msg}</color>";
+        else if (type == MsgType.Info) msg = $"<color=#25D3FF>{msg}</color>";
 
         logHistory.AddRange(msg.Split('\n'));
         while (logHistory.Count > maxLines) logHistory.RemoveAt(0);
@@ -417,7 +446,10 @@ public class Debugger : MonoBehaviour
 
     public static void RemoveVar(string name) => vars.Remove(name);
 
-    public static void DisplayProgressBar(string name, int currentProgress, int maxProgress)
+    public static void DisplayProgressBar(string name, Func<float> getter, float maxProgress) =>
+        progressBars[name] = (Func<float>)(() => Mathf.Clamp01((float)getter() / maxProgress));
+    
+    public static void DisplayProgressBar(string name, float currentProgress, float maxProgress)
     {
         if (currentProgress == maxProgress)
         {
@@ -427,9 +459,34 @@ public class Debugger : MonoBehaviour
 
         progressBars[name] = Mathf.Clamp01((float)currentProgress / maxProgress);
     }
+    public static bool isProggresBarDisplayed(string name) => progressBars.ContainsKey(name);
+    public static bool isValueBarDisplayed(string name) => valueBars.ContainsKey(name);
+    public static bool isVarDisplayed(string name) => vars.ContainsKey(name);
+
+
+    struct ValueBar
+    {
+        public float value;
+        public float min;
+        public float max;
+        public 
+            ValueBar (float value, float min, float max)
+        {
+            this.value = value;
+            this.min = min;
+            this.max = max;
+        }
+    }
+    public static void DisplayValueBar(string name, Func<float> getter, float minValue = 0, float maxValue = 1, float? minOutValue = null, float? maxOutValue = null) =>
+        valueBars[name] = (Func<ValueBar>)(() => new ValueBar((Map(getter(), minValue, maxValue, minOutValue ?? minValue, maxOutValue ?? maxValue)), minOutValue ?? minValue, maxOutValue ?? maxValue));
+
+    public static void DisplayValueBar(string name, float value, float minValue = 0, float maxValue = 1, float? minOutValue = null, float? maxOutValue = null) =>    
+        valueBars[name] = new ValueBar((Map(value, minValue, maxValue, minOutValue ?? minValue, maxOutValue ?? maxValue)), minOutValue ?? minValue, maxOutValue ?? maxValue);
+   
+    static float Map(float v, float inMin, float inMax, float outMin, float outMax) => (Mathf.Clamp((v - inMin) * (outMax - outMin) / (inMax - inMin) + outMin, outMin, outMax));
 
     public static void HideProgressBar(string name) => progressBars.Remove(name);
-
+    public static void HideValueBar(string name) => valueBars.Remove(name);
     void OnEnable() => Application.logMessageReceivedThreaded += HandleLogThreaded;
     void OnDisable() => Application.logMessageReceivedThreaded -= HandleLogThreaded;
 
@@ -442,7 +499,7 @@ public class Debugger : MonoBehaviour
     static MsgType Log2MsgType(LogType type) =>
         type == LogType.Error || type == LogType.Exception ? MsgType.Error :
         type == LogType.Warning || type == LogType.Assert ? MsgType.Warn :
-        MsgType.Info; 
+        MsgType.Debug; 
 
     void CalculateDevider()
     {

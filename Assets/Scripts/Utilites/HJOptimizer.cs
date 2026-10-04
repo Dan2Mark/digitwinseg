@@ -12,7 +12,7 @@ public class HookeJeevesCameraPoseOptimizer : OptimizerBase
     int dimensionIndex;
     readonly float stepReduction;
 
-    public HookeJeevesCameraPoseOptimizer(CameraPose initialPose, bool optimizeY = true, float positionStep = .25f, float yStep = .05f, float rotationStep = 5f, float scoreTolerance = .001f, float parameterTolerance = .02f, int maxIterations  = 100, float maxXOffset = 30f, float maxYOffset =10f, float maxZOffset = 30f, float maxYawOffset = 90f, float stepReduction = .5f)
+    public HookeJeevesCameraPoseOptimizer(CameraPose initialPose, bool optimizeY = true, float positionStep = .5f, float yStep = .05f, float rotationStep = 5f, float scoreTolerance = .001f, float parameterTolerance = .02f, int maxIterations  = 100, float maxXOffset = 30f, float maxYOffset =10f, float maxZOffset = 30f, float maxYawOffset = 90f, float stepReduction = .5f)
         : base(initialPose, optimizeY, positionStep, yStep, rotationStep, scoreTolerance, parameterTolerance, maxIterations, maxXOffset, maxYOffset, maxZOffset, maxYawOffset)
     {
         if (stepReduction <= 0f || stepReduction >= 1f) throw new ArgumentOutOfRangeException(nameof(stepReduction));

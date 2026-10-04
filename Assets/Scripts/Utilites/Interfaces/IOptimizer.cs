@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using UnityEngine;
 using static CameraAlignmentManager;
@@ -26,6 +26,8 @@ public abstract class OptimizerBase : IOptimizer
     protected double currentScore, bestScore = double.NegativeInfinity;
     protected bool initialized, converged;
     protected int iteration;
+    protected Vector3 localRight;
+    protected Vector3 localForward;
 
     public CameraPose CurrentPose => currentPose;
     public CameraPose BestPose => bestPose;
@@ -52,6 +54,16 @@ public abstract class OptimizerBase : IOptimizer
     protected void ResetBase(CameraPose initialPose)
     {
         this.initialPose = initialPose;
+
+        // Фиксируем локальную систему координат
+        localForward = initialPose.rotation * Vector3.forward;
+        localForward.y = 0f;
+        localForward.Normalize();
+
+        localRight = initialPose.rotation * Vector3.right;
+        localRight.y = 0f;
+        localRight.Normalize();
+
         currentQ = bestQ = Vector4.zero;
         currentPose = bestPose = initialPose;
         currentScore = 0f;
@@ -82,10 +94,22 @@ public abstract class OptimizerBase : IOptimizer
     protected CameraPose SetQ(Vector4 q)
     {
         currentQ = ClampQ(q);
-        currentPose = new CameraPose(
-            new Vector3(initialPose.px + currentQ.x * positionStep, initialPose.py + currentQ.y * yStep, initialPose.pz + currentQ.z * positionStep),
-            Quaternion.Euler(initialPose.rx, initialPose.ry + currentQ.w * rotationStep, initialPose.rz)
+
+        Vector3 worldOffset =
+            localRight * (currentQ.x * positionStep) +
+            Vector3.up * (currentQ.y * yStep) +
+            localForward * (currentQ.z * positionStep);
+
+        Vector3 position = initialPose.position + worldOffset;
+
+        Quaternion rotation = Quaternion.Euler(
+            initialPose.rx,
+            initialPose.ry + currentQ.w * rotationStep,
+            initialPose.rz
         );
+
+        currentPose = new CameraPose(position, rotation);
+
         return currentPose;
     }
 

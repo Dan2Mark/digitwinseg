@@ -5,7 +5,11 @@ using UnityEngine;
 
 public class EvaluationManager : MonoBehaviour
 {
-
+    [SerializeField] CameraAlignmentManager _cameraAlignmentManager;
+    public void GetSimilarity()
+    {
+        double similarity = _cameraAlignmentManager.getSimilarity();
+    }
     float FPS = 30.0f;
     float LastFPS = 0;
     // Start is called before the first frame update

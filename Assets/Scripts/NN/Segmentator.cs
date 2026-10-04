@@ -11,7 +11,7 @@ public class Segmentator : MonoBehaviour
     private Worker worker;
     private Model model;
 
-    private const int Size = 512, Pixels = Size * Size, Classes = 7;
+    private const int Size = 512, Pixels = Size * Size, Classes = 13;
 
     private void Awake()
     {
@@ -27,8 +27,12 @@ public class Segmentator : MonoBehaviour
             Texture2D inputTexture = PrepareInputTexture(sourceTexture);
             Tensor<float> inputTensor = CreateInputTensor(inputTexture);
 
+
             worker.Schedule(inputTensor);
+
+
             Tensor<float> output = worker.PeekOutput() as Tensor<float>;
+
             if (output == null) throw new Exception("Sentis output is null");
 
             Tensor<float> outCpu = output.ReadbackAndClone();
