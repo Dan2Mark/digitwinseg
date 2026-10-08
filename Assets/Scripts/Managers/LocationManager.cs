@@ -67,7 +67,7 @@ public class LocationManager : MonoBehaviour
         _compassConnector.deactivateCompass();
     }
 
-
+    /*
     public IEnumerator MultipleMeasuresGPSAccuracy(Cords realCords, int count, float realHeading, float compassHeading)
     {
         Debugger.Log($"Starting multiple GPS accuracy evaluation");
@@ -129,7 +129,7 @@ public class LocationManager : MonoBehaviour
         Debugger.HideProgressBar("GPS Evaluation");
         deactivateLocation();
     }
-
+    */
 
     public (Cords, bool, float, bool) GetLocation()
     {

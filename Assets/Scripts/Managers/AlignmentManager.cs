@@ -1,4 +1,5 @@
 using CesiumForUnity;
+using System;
 using System.Collections;
 using System.Collections.Generic;
 using System.Linq;
@@ -51,6 +52,7 @@ public class AllignmentManager : MonoBehaviour
     private CameraAlignmentManager.CameraPose _cameraAlignmentOffset = new CameraAlignmentManager.CameraPose(Vector3.zero, new Quaternion(0,0,0,0));
 
     private float _efficiency;
+    private double similarity = 0;
 
     private GPSConnector.Cords _currentCords;
     private Vector3 _cityPosition = new Vector3(0, 0, 0);
@@ -68,9 +70,24 @@ public class AllignmentManager : MonoBehaviour
         ResetPosition();
     }
 
+    bool calculateFPS = false;
+    public float FPS = 30.0f;
+    float LastFPS = 0;
+    void StartFPSCalculation ()
+    {
+        calculateFPS = true;
+        FPS = 30;
+    }
+    void StopFPSCalculation () => calculateFPS = false;
+
     // Update is called once per frame
     void Update()
     {
+        if (calculateFPS)
+        {
+            LastFPS = (1.0f / Time.unscaledDeltaTime);
+            FPS = FPS * 0.01f + LastFPS * 0.99f;
+        }
         Vector2 joystickInput = Vector2.zero;
         if (Gamepad.current != null) joystickInput = Gamepad.current.leftStick.ReadValue();
 
@@ -121,6 +138,7 @@ public class AllignmentManager : MonoBehaviour
     IEnumerator LocationAlignmentRoutine()
     {
         Debugger.Log("Position reset. Starting GPS allignment...");
+        StartFPSCalculation();
         isCesiumLoaded = false;
         float _efficiencyStartTime = Time.time;
 
@@ -176,15 +194,21 @@ public class AllignmentManager : MonoBehaviour
             _LocationManager.deactivateLocation();
         }
 
-        yield return new WaitForSeconds(1.0f);
-        StartCoroutine(WaitCesiumLoading());
-        yield return new WaitForSeconds(0.5f);
-        yield return new WaitUntil(() => isCesiumLoaded);
-        //AlignWithCamera();
 
-        _efficiency = Time.time - _efficiencyStartTime;
-        Debugger.Log($"GPS allignment complite! Took {(_efficiency):F2} seconds.", Debugger.MsgType.Success);
         
+        _efficiency = Time.time - _efficiencyStartTime;
+        StopFPSCalculation();
+        
+        Debugger.Log($"GPS allignment complite! Took {(_efficiency):F2} seconds.", Debugger.MsgType.Success);
+
+        for (int i = 3; i > 0; i--)
+        {
+            Debugger.Log($"Taking photo in {i} s...");
+            yield return new WaitForSeconds(1);
+        }
+        similarity = _cameraAlignmentManager.getSimilarity();
+
+        //yield return CameraAlignment();
     }
 
     public void AlignWithCamera()
@@ -239,16 +263,25 @@ public class AllignmentManager : MonoBehaviour
         StartCoroutine(LocationAlignmentRoutine());
     }
 
+    float DTAheading = 0f;
     public void AcceptPosition()
     {
         Debugger.Log("Accept Position");
 
         GPSConnector.Cords realCords = _GPSConnector.FromUnityCords(_positionOffsetTransform.position);
-        
+
+        GPSConnector.Cords DTACords = _GPSConnector.FromUnityCords(_positionOffsetTransform.position + _pureJoystickOffsetMeters);
+
         Debugger.Log("Real Cords: " +  realCords.ToString());
-        float realHeading = _capturedCompassHeading - _rotationOffset;
-        _evaluationManager.AcceptPosition(realCords, _currentCords, realHeading, _capturedCompassHeading, _efficiency);
-        StartCoroutine(_LocationManager.MultipleMeasuresGPSAccuracy(realCords, 9, realHeading, _capturedCompassHeading));
+
+        Debugger.Log("DTA Cords: " + DTACords.ToString());
+
+        DateTime now = DateTime.Now;
+        int placeId = HashCode.Combine(now.Date, now.Hour, now.Minute);
+       
+        float realHeading = _capturedCompassHeading + DTAheading - _rotationOffset;
+        _evaluationManager.AcceptPosition(placeId, realCords, _currentCords, DTACords, realHeading, _capturedCompassHeading, DTAheading, _efficiency, _cameraAlignmentManager.efficiency, FPS, CameraAlignmentManager.FPS, (float)SimilarityScoreEstimator.NormalizeSimilarity(similarity), (float)SimilarityScoreEstimator.NormalizeSimilarity(_cameraAlignmentManager.similarity), _cameraAlignmentManager.obstaclesRatio, _cameraAlignmentManager.skyRatio, _cameraAlignmentManager.buildingRatio, _cameraAlignmentManager.groundRatio);
+        //StartCoroutine(_LocationManager.MultipleMeasuresGPSAccuracy(realCords, 9, realHeading, _capturedCompassHeading));
     }
 
 
@@ -288,6 +321,7 @@ public class AllignmentManager : MonoBehaviour
     private void setRotation()
     {
         float angle = _capturedCompassHeading - _rotationOffset + _arCameraTransform.rotation.y + _cameraAlignmentOffset.ry;
+        DTAheading = _cameraAlignmentOffset.ry;
         Quaternion rot = Quaternion.Euler(0f, angle, 0f);
         _rotationOffsetTransform.rotation = rot;
     }

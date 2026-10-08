@@ -76,7 +76,7 @@ public class SimilarityScoreEstimator : MonoBehaviour
 
         double skySimilarity = - Math.Abs(pxSkyCntImg1 - pxSkyCntImg2) / ((pxSkyCntImg1 + pxSkyCntImg2) / 2f) * 10f;
         
-        var outScore = normalize ? ((averageScore + skySimilarity) + 90) / 100.0f : (averageScore + skySimilarity);
+        var outScore = normalize ? SimilarityScoreEstimator.NormalizeSimilarity(averageScore + skySimilarity) : (averageScore + skySimilarity);
         Debugger.DisplayValueBar("Similarity", (float)outScore, normalize ? 0 : -90, normalize ? 1 : 10);
         
         if (outScore > maxScore)
@@ -93,4 +93,7 @@ public class SimilarityScoreEstimator : MonoBehaviour
         Debugger.HideValueBar("Similarity");
         Debugger.HideValueBar("Max Similarity");
     }
+
+    public static double NormalizeSimilarity(double similarity) => ((similarity) + 90) / 100.0f;
+
 }

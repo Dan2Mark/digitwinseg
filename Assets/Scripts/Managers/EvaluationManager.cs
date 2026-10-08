@@ -1,3 +1,4 @@
+using System;
 using System.Collections;
 using System.Collections.Generic;
 using System.IO;
@@ -5,11 +6,7 @@ using UnityEngine;
 
 public class EvaluationManager : MonoBehaviour
 {
-    [SerializeField] CameraAlignmentManager _cameraAlignmentManager;
-    public void GetSimilarity()
-    {
-        double similarity = _cameraAlignmentManager.getSimilarity();
-    }
+
     float FPS = 30.0f;
     float LastFPS = 0;
     // Start is called before the first frame update
@@ -24,33 +21,34 @@ public class EvaluationManager : MonoBehaviour
         FPS = LastFPS;
     }
 
-    public void AcceptPosition(GPSConnector.Cords realCords, GPSConnector.Cords alignmentCords, float realHeading, float alignmentHeading, float efficiency)
+    public void AcceptPosition(int place_id, GPSConnector.Cords realCords, GPSConnector.Cords GPSCords, GPSConnector.Cords DTACords, float realHeading, float compassHeading, float DTAheading, float GPSefficiency, float DTAefficiency, float GPS_FPS, float DTA_FPS, float GPS_similarity, float DTA_similarity, float obstaclesRatio, float skyRatio, float buldingRatio, float groundRatio)
     {
-        float square_err = GPSConnector.HaversineDistance(realCords, alignmentCords); //Mathf.Sqrt(_pureJoystickOffsetMeters.x * _pureJoystickOffsetMeters.x + _pureJoystickOffsetMeters.z * _pureJoystickOffsetMeters.z);
-        float compass_err = Mathf.DeltaAngle(realHeading, alignmentHeading);
-        Debugger.Log("Compass error: " + compass_err);        
-        SaveMetricsToCsv(alignmentCords.lon, alignmentCords.lat, efficiency, Mathf.Abs(realCords.lat - alignmentCords.lat), Mathf.Abs(realCords.lon - alignmentCords.lon), square_err, alignmentHeading, compass_err, FPS);
+        float GPS_square_err = GPSConnector.HaversineDistance(realCords, GPSCords);
+        float DTA_square_err = GPSConnector.HaversineDistance(realCords, DTACords);
+        float compass_err = Mathf.DeltaAngle(realHeading, compassHeading);
+        float DTA_angle_err = Mathf.DeltaAngle(realHeading, DTAheading);
+        Debugger.Log("Compass error: " + compass_err);
+        SaveMetricsToCsv(place_id, GPS_square_err, compass_err, GPS_FPS, GPSefficiency, GPS_similarity, DTA_square_err, DTA_angle_err, DTA_FPS, DTAefficiency, DTA_similarity, obstaclesRatio, skyRatio, buldingRatio, groundRatio);
     }
 
-    private void SaveMetricsToCsv(double gpsLon, double gpsLat, float efficiency, double latErr, double lonErr, float squareErr, float compassHeading, float compassErr, float avgFps)
+    private void SaveMetricsToCsv(int place_id, float gpsSquareErr, float compassErr, float gpsAverageFps, float gpsEfficiency, float gpsSimilarity, float dtaSquareErr, float dtaAngleErr, float dtaAverageFps, float dtaEfficiency, float dtaSimilarity, float obstaclesRatio, float skyRatio, float buldingRatio, float groundRatio)
     {
         Debugger.Log("Evaluation Manager -> SaveMetricsToCsv");
         string filePath = Path.Combine(Application.persistentDataPath, "alignment_metrics.csv");
         bool writeHeader = !File.Exists(filePath);
+        var now = DateTime.Now;
 
         using (StreamWriter sw = new StreamWriter(filePath, true))
         {
             if (writeHeader)
-            {
-                sw.WriteLine("gps_lon;gps_lat;Efficiency;lat_err;lon_err;square_err_meters;CompassHeading;compass_err;average_FPS");
-            }
+                sw.WriteLine("place_id;GPS_square_err_meters;Compass_err;GPS_average_FPS;GPS_Efficiency;GPS_Similarity;DTA_square_err_meters;DTA_angle_err;DTA_average_FPS;DTA_Efficiency;DTA_Similarity;Time;Obstacles_Ratio;Sky_Ratio;Building_Ratio;Ground_Ratio");
 
-            string line = string.Format(System.Globalization.CultureInfo.InvariantCulture,
-                "{0:F7};{1:F7};{2:F2};{3:F7};{4:F7};{5:F2};{6:F1};{7:F1};{8:F1}",
-                gpsLon, gpsLat, efficiency, latErr, lonErr, squareErr, compassHeading, compassErr, avgFps);
-            sw.WriteLine(line);
+            sw.WriteLine(string.Format(System.Globalization.CultureInfo.InvariantCulture,
+            "{0};{1:F7};{2:F2};{3:F1};{4:F7};{5:F2};{6:F7};{7:F2};{8:F1};{9:F7};{10:F2};{11};{12:F4};{13:F4};{14:F4};{15:F4}",
+            place_id, gpsSquareErr, compassErr, gpsAverageFps, gpsEfficiency, gpsSimilarity, dtaSquareErr, dtaAngleErr, dtaAverageFps, dtaEfficiency, dtaSimilarity, now.ToString("HH:mm"), obstaclesRatio, skyRatio, buldingRatio, groundRatio));
         }
-        Debugger.Log($"Data saved to CSV! Compass error: {compassErr}; GPS Error: {squareErr}");
+
+        Debugger.Log($"Data saved to CSV! GPS error: {gpsSquareErr} m; Compass error: {compassErr}; DTA position error: {dtaSquareErr} m; DTA angle error: {dtaAngleErr}");
         ResetMetrics();
     }
 }

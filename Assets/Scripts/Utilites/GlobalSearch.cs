@@ -10,6 +10,7 @@ public class GlobalSearch : MonoBehaviour
     {
         public float rMin, rMax, angleMin, angleMax;
         public int depth;
+        public List<float> bestAngles;
         public double score = double.NegativeInfinity, searchPriority = double.NegativeInfinity;
         public bool isCenter;
         public CameraPose bestPose;
