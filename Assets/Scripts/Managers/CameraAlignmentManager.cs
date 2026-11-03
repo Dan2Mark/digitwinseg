@@ -20,6 +20,7 @@ using UnityEngine.XR.ARSubsystems;
 using static CameraAlignmentManager;
 using static GlobalSearch;
 using static MultipleViewManager;
+using static UnityEngine.UI.CanvasScaler;
 
 public class CameraAlignmentManager : MonoBehaviour
 {
@@ -47,7 +48,7 @@ public class CameraAlignmentManager : MonoBehaviour
     private Camera virtualSegmentationCamera;
 
     private Camera visualizationCamera;
-    private Camera cesiumLoadingCamera;
+    private Camera cesiumLoadingCamera, backCesiumLoadingCamera;
 
     private RenderTexture alignmentTexture;
     private RenderTexture virtualPreSegmentationTexture;
@@ -79,7 +80,63 @@ public class CameraAlignmentManager : MonoBehaviour
 
     private const int Size = 512, Pixels = Size * Size, Classes = 13;
     private Texture2D displayRenderTexture, displayPhotoTexture;
-    
+
+    [SerializeField] private Transform rightAdditionalViewsGroup;
+    [SerializeField] private Transform leftAdditionalViewsGroup;
+    [SerializeField] private GameObject additionalViewPrefab;
+
+    private List<Texture2D> additionalViewsPhotos = new List<Texture2D>();
+    private List<Texture2D> additionalViewsRenders = new List<Texture2D>();
+
+    private void CreateAdditionalViews()
+    {
+        ClearAdditionalViews();
+        float mainRY = AdditionalPose.mainPose.ry;
+
+        for (int i = 0; i < AdditionalPose.additionalPoses.Count; i++)
+        {
+            if (i == AdditionalPose._mainPoseId) continue;
+
+            float currentRY = AdditionalPose.additionalPoses[i].pose.ry;
+
+            GameObject view = Instantiate(additionalViewPrefab, Mathf.DeltaAngle(mainRY, currentRY) < 0 ? leftAdditionalViewsGroup : rightAdditionalViewsGroup); 
+            RawImage[] images = view.GetComponentsInChildren<RawImage>(true);
+
+            if (images.Length < 2)
+            {
+                Debug.LogError($"AdditionalView #{i} must contain two RawImages.");
+                Destroy(view);
+                continue;
+            }
+
+            Texture2D tex1 = new Texture2D(Size, Size, TextureFormat.RGBA32, false);
+            Texture2D tex2 = new Texture2D(Size, Size, TextureFormat.RGBA32, false);
+
+            images[0].texture = tex1;
+            images[1].texture = tex2;
+
+            additionalViewsPhotos.Add(tex1);
+            additionalViewsRenders.Add(tex2);
+        }
+    }
+    private void ClearAdditionalViews()
+    {
+        for (int i = 0; i < rightAdditionalViewsGroup.childCount; i++)
+            Destroy(rightAdditionalViewsGroup.GetChild(i).gameObject);
+        for (int i = 0; i < leftAdditionalViewsGroup.childCount; i++)
+            Destroy(leftAdditionalViewsGroup.GetChild(i).gameObject);
+
+
+        foreach (var texture in additionalViewsPhotos)
+            if (texture != null) Destroy(texture);
+
+        foreach (var texture in additionalViewsRenders)
+            if (texture != null) Destroy(texture);
+
+        additionalViewsPhotos.Clear();
+        additionalViewsRenders.Clear();
+    }
+
     private readonly Color32[] palette =
     {
         new(0, 0, 0, 255),
@@ -142,19 +199,27 @@ public class CameraAlignmentManager : MonoBehaviour
             return new CameraPose(pos, rot);
         }
 
-        public static CameraPose operator +(CameraPose a, CameraPose b) => new CameraPose(a.p + b.p, Quaternion.Euler(a.r.eulerAngles + b.r.eulerAngles));
-        public static CameraPose operator -(CameraPose a, CameraPose b) => new CameraPose(a.p - b.p, Quaternion.Euler(a.r.eulerAngles - b.r.eulerAngles));
-        public static CameraPose operator +(CameraPose a, Vector3 b) => new CameraPose(a.p + b, a.r);
-        public static CameraPose operator -(CameraPose a, Vector3 b) => new CameraPose(a.p - b, a.r);
-        public static CameraPose operator +(CameraPose a, Quaternion b) => new CameraPose(a.p, Quaternion.Euler(a.r.eulerAngles + b.eulerAngles));
-        public static CameraPose operator -(CameraPose a, Quaternion b) => new CameraPose(a.p, Quaternion.Euler(a.r.eulerAngles - b.eulerAngles));
+        public static CameraPose operator +(CameraPose a, CameraPose b) => new CameraPose(a.position + b.position, a.rotation * b.rotation);
 
+        public static CameraPose operator -(CameraPose a, CameraPose b) => new CameraPose(a.position - b.position, a.rotation * Quaternion.Inverse(b.rotation));
+
+        public static CameraPose operator +(CameraPose a, Vector3 b) => new CameraPose(a.position + b, a.rotation);
+
+        public static CameraPose operator -(CameraPose a, Vector3 b) => new CameraPose(a.position - b, a.rotation);
+
+        public static CameraPose operator +(CameraPose a, Quaternion b) => new CameraPose(a.position, a.rotation * b);
+
+        public static CameraPose operator -(CameraPose a, Quaternion b) => new CameraPose(a.position, a.rotation * Quaternion.Inverse(b));
+        public override string ToString()
+        {
+            return $"p: ({px}; {pz}), r: {ry}";
+        }
+        public float GetDistance(CameraPose pose) => (float)Math.Sqrt(Math.Pow(pose.px -px, 2)+ Math.Pow(pose.py - py, 2));
     }
     private CameraPose visualsationCameraPose { get { return _visualizationCameraPose; } set { _visualizationCameraPose = value; SetVisualisationCamerasPosition(); } }
     private CameraPose alignmentCameraPose { get { return _alignmentCameraPose; } set { _alignmentCameraPose = value; SetAlignmentCamerasPosition(); } }
-    private CameraPose _alignmentCameraPose = new();
-    private CameraPose _visualizationCameraPose = new();
-    private CameraPose basePose = new();
+    private CameraPose _alignmentCameraPose = new CameraPose(Vector3.zero, Quaternion.identity);
+    private CameraPose _visualizationCameraPose = new CameraPose(Vector3.zero, Quaternion.identity);
 
     public struct PoseScore
     {
@@ -163,12 +228,22 @@ public class CameraAlignmentManager : MonoBehaviour
         public CameraPose pose;
         public double score;
         public double realScore;
-
+        public double multipleViewScore;
         public PoseScore(CameraPose pose, double score)
         {
             this.pose = pose;
             this.score = score;
-            this.realScore = score;
+            this.realScore = -100;
+            this.multipleViewScore = -100;
+
+        }
+
+        public PoseScore(CameraPose pose, (double score, double multipleViewScore) score)
+        {
+            this.pose = pose;
+            this.score = score.score;
+            this.realScore = -100;
+            this.multipleViewScore = score.multipleViewScore;
         }
 
         public static void ResetBestPose()
@@ -177,73 +252,116 @@ public class CameraAlignmentManager : MonoBehaviour
         }
     }
     private PoseScore? _bestPose;
+    private List<PoseScore> _bestPoses = new List<PoseScore>();
 
     public bool IsBestPose(PoseScore poseScore, PoseScore? bestPose, byte[] photo)
     {
+        if (IsInsideBuilding(poseScore.pose.p)) return false;
         if (bestPose == null)
             bestPose = _bestPose;
         if (bestPose == null)
         {
             //Debug.Log("bestPose null");
-            poseScore.realScore = GetAdditionalPosesScore(poseScore.pose, photo);
+            poseScore.multipleViewScore = GetAdditionalPosesScore(poseScore.pose, photo, false).Item2;
+            poseScore.realScore = GetAdditionalPosesScore(poseScore.pose, photo).Item2;
             //poseScore.realScore = SimilarityScoreEstimator.GetSimilarityScore(photo, segmentRender(false, true));
             if (_bestPose == null)
                 _bestPose = poseScore;
             return true;
         }
-        else if (poseScore.score > bestPose?.score)
+        //isBestPoseReallyBest(photo);
+        if (poseScore.score > bestPose?.score)
         {
-            //Debugger.Log("New best candidate: " + poseScore.pose.position.ToString() + "; " + poseScore.score);
+            if (poseScore.multipleViewScore == -100)
+            {
+                poseScore.multipleViewScore = GetAdditionalPosesScore(poseScore.pose, photo, false).Item2;
+            }
+            
             if (poseScore.score > (_bestPose?.score ?? double.MinValue))
             {
                 int addCnt = AdditionalPose.additionalPoses.Count;
-                poseScore.realScore = GetAdditionalPosesScore(poseScore.pose, photo);
-                //poseScore.realScore = SimilarityScoreEstimator.GetSimilarityScore(photo, segmentRender(true, true));
+                poseScore.realScore = GetAdditionalPosesScore(poseScore.pose, photo).Item2;
                 if (poseScore.realScore > bestPose?.realScore)
                 {
-                    //Debugger.Log("New best!: " + poseScore.pose.position.ToString() + "; " + poseScore.score, Debugger.MsgType.Success);
                     _bestPose = poseScore;
                     return true;
                 }
             }
-            else return true;
+            var bestMultyScore = bestPose?.multipleViewScore ?? _bestPose?.multipleViewScore ?? double.MinValue;
+
+            return (poseScore.multipleViewScore > bestMultyScore);
         }
         return false;
     }
 
-    private double GetAdditionalPosesScore(CameraPose pose, byte[] photo, bool segment = true)
+    void isBestPoseReallyBest(byte[] photo)
+    {
+        if (_bestPoses.Count < 2) return;
+        CameraPose prev = alignmentCameraPose;
+        int cnt = _bestPoses.Count;
+        alignmentCameraPose = _bestPoses[cnt - 1].pose;
+        var score = GetAdditionalPosesScore(_bestPoses[cnt - 1].pose,photo,false).Item2;
+        if (score <= _bestPoses[cnt - 2].score)
+        {
+            _bestPose = _bestPoses[cnt - 2];
+            _bestPoses.Remove(_bestPoses[cnt - 1]);        
+        }
+        alignmentCameraPose = prev;
+    }
+
+    bool isFirstGetAdditionalPoseScore = true;
+    private (double, double) GetAdditionalPosesScore(CameraPose pose, byte[] photo, bool segment = true)
     {
         int addCnt = AdditionalPose.additionalPoses.Count;
         double additionalScore = 0;
+        int j = 0;
+        double mainPoseScore = 0;
         for (int i = 0; i < addCnt; i++)
         {
             var p = AdditionalPose.additionalPoses[i];
-            alignmentCameraPose = pose + p.offset;
-           //TODO DrawByte512x512(p.photo, displayPhotoTexture);
-            
-            additionalScore += SimilarityScoreEstimator.GetSimilarityScore(p.photo, segmentRender(true, segment));
-        }
-        //DrawByte512x512(photo, displayPhotoTexture);
+            alignmentCameraPose = p.ApplyToAlignedMain(pose);
+            var render = segmentRender(false, segment);
+            var score = SimilarityScoreEstimator.GetSimilarityScore(p.photo, render);
+            additionalScore += score;
+
+            if (i != AdditionalPose._mainPoseId)
+            {
+                if (j < additionalViewsPhotos.Count && j < additionalViewsRenders.Count)
+                {
+                    if (isFirstGetAdditionalPoseScore)
+                        DrawByte512x512(p.photo, additionalViewsPhotos[j]);
+
+                    DrawByte512x512(render, additionalViewsRenders[j]);
+                }
+                else
+                {
+                    Debug.LogWarning($"Additional view index {j} out of range. Photos: {additionalViewsPhotos.Count}, Renders: {additionalViewsRenders.Count}"
+                    );
+                }
+                j++;
+            }
+            else
+            {
+                DrawByte512x512(render, displayRenderTexture);
+                mainPoseScore = score;
+            }
+        }   
 
         alignmentCameraPose = pose;
-        return additionalScore / addCnt;
+        isFirstGetAdditionalPoseScore = false;
+        return (mainPoseScore , additionalScore / addCnt);
     }
-
-
-    private CameraPose prevPose;
-    bool hasPrevPose = false;
 
     public void _Reset()
     {
-        hasPrevPose = false;
-        prevPose = new CameraPose();
         _multipleViewManager._Reset();
-       //TODO StartCoroutine(_multipleViewManager.SetNewViews());
+        isAlined = false;
     }
 
     /// ### START ### ///
     void Start()
     {
+        cMask = ARCamera.cullingMask;
         CesiumGeoreference cesiumGeoreference = FindFirstObjectByType<CesiumGeoreference>();
 
         if (cesiumGeoreference == null)
@@ -275,7 +393,6 @@ public class CameraAlignmentManager : MonoBehaviour
         displayPhotoImage.enabled = true;
         displayRenderImage.texture = displayRenderTexture;
         displayRenderImage.enabled = true;
-
     }
     private void OnDestroy()
     {
@@ -353,7 +470,7 @@ public class CameraAlignmentManager : MonoBehaviour
             StartCoroutine(UpdateCesiumLoading());
             yield return new WaitForSeconds(0.1f);
         }
-        Debugger.Log("Wait until Cesium loaded...", Debugger.MsgType.Warn);
+        //Debugger.Log("Wait until Cesium loaded...", Debugger.MsgType.Warn);
         while (_cesiumLoading < threahold) yield return new WaitForSeconds(0.05f);
     }
 
@@ -363,7 +480,7 @@ public class CameraAlignmentManager : MonoBehaviour
 
         alignmentCameraPose = initialPose;
         PoseScore bestPose = new PoseScore(initialPose, GetAdditionalPosesScore(initialPose, photo, false));
-
+        
         var _pivot = LookToPivotPoint ? GetPivotPoint(initialPose) : null;
         if (LookToPivotPoint && _pivot == null)
             yield break;
@@ -374,7 +491,7 @@ public class CameraAlignmentManager : MonoBehaviour
             yield return WaitUntilCesiumLoaded();
             var p = new CameraPose(initialPose.position + LocalToWorldOffset(initialPose, new Vector3(axis ? x : 0, 0, !axis ? x : 0)).position, initialPose.rotation);
             if (IsInsideBuilding(p.position))
-                if (axis && TryGetOutFromBuilding(p, out CameraPose newP))
+                if (axis && TryGetOutFromBuilding(p, out CameraPose newP, false, LookToPivotPoint))
                     p = newP;
                 else continue;
 
@@ -397,8 +514,9 @@ public class CameraAlignmentManager : MonoBehaviour
     private IEnumerator OptimizeRotation(CameraPose initialPose, byte[] photo, float maxAngle = 30f, float angleStep = 5f)
     {
         alignmentCameraPose = initialPose;
-        PoseScore bestPose = new PoseScore(initialPose, bestPose.score = GetAdditionalPosesScore(initialPose, photo, false));
-        
+        PoseScore initPoseS = new PoseScore(initialPose, GetAdditionalPosesScore(initialPose, photo, false));
+        PoseScore bestPose = initPoseS;
+
         for (float a = -maxAngle; a <= maxAngle; a += angleStep, globalIterCnt++)
         {
             yield return WaitUntilCesiumLoaded();
@@ -407,10 +525,13 @@ public class CameraAlignmentManager : MonoBehaviour
             alignmentCameraPose = p;
 
             var currentPose = new PoseScore(p, GetAdditionalPosesScore(p, photo, false));
-            
+            if (currentPose.score > initPoseS.score && Mathf.DeltaAngle(currentPose.pose.ry,initialPose.ry) > 15)
+            {
+                yield return OptimizePose(currentPose.pose, photo, 30);
+            }
+            yield return null;
             if (IsBestPose(currentPose, bestPose, photo))
                 bestPose = currentPose;
-            yield return null;
         }
         alignmentCameraPose = bestPose.pose;
     }
@@ -418,7 +539,8 @@ public class CameraAlignmentManager : MonoBehaviour
     private IEnumerator OptimizeRotationAroundPoint(CameraPose initialPose,byte[] photo, bool display = true, float maxAngle = 30f, float angleStep = 5f)
     {
         alignmentCameraPose = initialPose;
-        PoseScore bestPose = new PoseScore(initialPose, GetAdditionalPosesScore(initialPose, photo, false));
+        PoseScore initPoseS = new PoseScore(initialPose, GetAdditionalPosesScore(initialPose, photo, false));
+        PoseScore bestPose = initPoseS;
 
         var _pivot = GetPivotPoint(initialPose);
         if (_pivot == null)
@@ -428,20 +550,25 @@ public class CameraAlignmentManager : MonoBehaviour
         for (float a = -maxAngle; a <= maxAngle; a += angleStep, globalIterCnt++)
         {
             yield return WaitUntilCesiumLoaded();
-            Quaternion q = Quaternion.Euler(initialPose.rx, a, initialPose.rz);
+            Quaternion q = Quaternion.AngleAxis(a, Vector3.up);
             Vector3 pos = pivot + q * (initialPose.position - pivot);
             Quaternion rot = q * initialPose.rotation;
             CameraPose p = new CameraPose(pos, rot);
+            if (initialPose.GetDistance(p) > 15)
+                continue;
 
             if (IsInsideBuilding(p.position))
-                if (TryGetOutFromBuilding(p, out CameraPose newP))
+                if (TryGetOutFromBuilding(p, out CameraPose newP, false, true))
                     p = newP;
                 else continue;
 
             alignmentCameraPose = p;
 
             var currentPose = new PoseScore(p, GetAdditionalPosesScore(p, photo, false));
-
+            if (currentPose.score > initPoseS.score && currentPose.pose.GetDistance(initialPose) > 5)
+            {
+                yield return OptimizePose(currentPose.pose, photo, 30);
+            }
             if (IsBestPose(currentPose,bestPose,photo))
                bestPose = currentPose;
             
@@ -452,16 +579,17 @@ public class CameraAlignmentManager : MonoBehaviour
         alignmentCameraPose = bestPose.pose;
     }
 
-    private Vector3? GetPivotPoint(CameraPose pose)
+   private Vector3? GetPivotPoint(CameraPose pose, float fallbackDistance = 70f)
     {
         Vector3 o = pose.position;
+        Vector3 d = Quaternion.Euler(0, pose.ry, 0) * Vector3.forward;
 
-        Vector3 d = Quaternion.Euler(0,pose.ry,0) * Vector3.forward;
+        if (Physics.Raycast(o, d, out RaycastHit hit, fallbackDistance, 1 << BUILDING_LAYER, QueryTriggerInteraction.Ignore))
+        {
+            return hit.point;
+        }
 
-        if (!Physics.Raycast(o, d, out RaycastHit hit, 1000f, 1 << BUILDING_LAYER, QueryTriggerInteraction.Ignore))
-            return null;
-        return hit.point;
-
+        return o + d * fallbackDistance;
     }
 
     private IEnumerator OptimizePose(CameraPose initialPose, byte[] photo, int iterations = 50, int rec_i = 0)
@@ -478,19 +606,21 @@ public class CameraAlignmentManager : MonoBehaviour
         for (int i = 0; globalIterCnt < 300 && !optimizer.IsConverged && i < iterations && localIterCnt < iterations && SimilarityScoreEstimator.maxScore < -2.8f; i++, localIterCnt++, globalIterCnt++)
         {
             
-            isDetail = i > 50 || true;
-            render = segmentRender(true, isDetail);
-            double score = SimilarityScoreEstimator.GetSimilarityScore(photo, render);
+            isDetail = i > 50;
+            double score = GetAdditionalPosesScore(alignmentCameraPose, photo, isDetail).Item2;
             var currentPose = new PoseScore(alignmentCameraPose, score);
 
             if (!IsBestPose(currentPose, _bestPose, photo))
                 countWorseScore++;
+
+
             else
             {
                 countWorseScore = 0;
                 _bestPose = currentPose;
             }
 
+            yield return null;
             if (score - (_bestPose?.score ?? score) < 0.01f)
             {
                 countNotChangedScore++;
@@ -515,26 +645,34 @@ public class CameraAlignmentManager : MonoBehaviour
             }
 
             alignmentCameraPose = nextPose;
-            yield return null;
 
         }
     }
 
     int localIterCnt = 0, globalIterCnt = 0;
     bool isAlignmentStarted = false;
+    bool isAlined = false;
 
     /// ### ALIGN ### ///
-    public IEnumerator Align(Action<CameraPose> callback)
+    public IEnumerator Align(Action<CameraPose> callback, bool visualisation = true)
     {
 
         if (isAlignmentStarted) yield break;
         ClearDisplayImages();
 
+
+        isFirstGetAdditionalPoseScore = true;
+        
         if (AdditionalPose.additionalPoses.Count == 0 && !_multipleViewManager.isScanning)
             StartCoroutine(_multipleViewManager.SetNewViews());
-        
+        else
+        {
+            AdditionalPose.SetNewPoseToMain(new CameraPose(ARCameraOffset.transform.position, ARCameraOffset.rotation));
+        }
+
         yield return new WaitUntil(() => !_multipleViewManager.isScanning);
 
+        CreateAdditionalViews();
         StartFPSCalculation();
 
         yield return WaitUntilCesiumLoaded();
@@ -546,7 +684,7 @@ public class CameraAlignmentManager : MonoBehaviour
 
 
         StartCoroutine(UpdateCesiumLoading());
-
+        _bestPoses.Clear();
         _bestPose = null;
         PoseScore.ResetBestPose();
 
@@ -560,42 +698,58 @@ public class CameraAlignmentManager : MonoBehaviour
             AlignmentCameraDisable();
             yield break;
         }
-        Debug.Log("1");
 
-
-        Debug.Log("2");
         byte[] photo = AdditionalPose.mainAddPose.photo;
-        StartCoroutine(CalculateRatios(photo));
+        CalculateRatios();
+        Debugger.Log($"obstacles: {obstaclesRatio}");
+        Debugger.Log($"sky: {skyRatio}");
+        Debugger.Log($"ground: {groundRatio}");
+        Debugger.Log($"buildings: {buildingRatio}") ;
+
         DrawByte512x512(photo, displayPhotoTexture);
 
-        Debug.Log("3");
         byte[] render = new byte[512 * 512];
 
         Debugger.DisplayProgressBar("Localization 1/4", 0, 4);
 
-        yield return globalPoseSearching(
-                new CameraPose(basePose.position, basePose.rotation),
-                photo
-            );
+
+        CameraPose init = AdditionalPose.mainPose;
+
+        Debugger.Log($"Camera: ({ARCamera.transform.position.x};{ARCamera.transform.position.z}); New: {AlignmentManager._pureJoystickOffsetMeters}; main: {init.ToString()}; ");
+        init = new CameraPose(init.position + AlignmentManager._pureJoystickOffsetMeters, Quaternion.Euler(init.rx, init.ry + AlignmentManager._rotationOffset, init.rz));
+        Debugger.Log("init: " +  init.ToString());
 
 
+        CameraPose poseBeforeAlignment = init;
+        
+        yield return WaitUntilCesiumLoaded(60f);
+        if (IsInsideBuilding(init.position))
+        {
+            _bestPose = new PoseScore(init, GetAdditionalPosesScore(init, photo, true));
+            yield return OptimizeRotation(alignmentCameraPose, photo, 170, 10f);
+        }
+        
+        yield return globalPoseSearching(init, photo);
+
+        
         Debugger.Log($"Final verification completed. {PoseScore.bestPoses.Count} best poses found.", Debugger.MsgType.Info);
 
         globalIterCnt = 0;
         int j = 0;
         Debugger.DisplayProgressBar("Localization 2/4", () => (j * 30 + localIterCnt) / (float)((PoseScore.bestPoses.Count) * 30), 4);
+        yield return null;
         Debugger.DisplayProgressBar("Optimization", () => j * 30 + localIterCnt, (PoseScore.bestPoses.Count) * 30);
 
         for (; j < PoseScore.bestPoses.Count && SimilarityScoreEstimator.maxScore < -2.8f; j++)
         {
             alignmentCameraPose = PoseScore.bestPoses[j].pose;
-            yield return OptimizeRotation(alignmentCameraPose, photo,85,8.5f);
+            yield return OptimizeRotation(alignmentCameraPose, photo,120,10f);
+            yield return OptimizePose(alignmentCameraPose, photo, 30);
             localIterCnt = 0;
-            yield return OptimizePose(alignmentCameraPose, photo,30);
 
             if (j>=0) PoseScore.bestPoses[j] = new PoseScore(_bestPose?.pose ?? alignmentCameraPose, _bestPose?.score ?? double.MinValue);
         }
-
+        
         Debugger.Log("Best poses optimized, choosed the best pose with score: " + Math.Round(SimilarityScoreEstimator.maxScore, 2) + $"; Took {Time.time - _efficiencyStartTime} seconds.", Debugger.MsgType.Info);
 
         Debugger.HideProgressBar("Localization 2/4");
@@ -610,8 +764,9 @@ public class CameraAlignmentManager : MonoBehaviour
         const int refinIterCnt = 18*2/3*2 + 6*2/2 + 60*2/5 + 10*2 + 30*2/5 + 6*2/2;
 
         Debugger.DisplayProgressBar("Localization 3/4", () => 2 + localIterCnt/4f / 70f, 4 + refinIterCnt/4f);
-
+        yield return null;
         Debugger.DisplayProgressBar("Position Refinement", () => globalIterCnt, refinIterCnt);
+        
         
         
         yield return OptimizeLocalPosition(alignmentCameraPose, photo, true, false, 18, 3);
@@ -621,8 +776,8 @@ public class CameraAlignmentManager : MonoBehaviour
         yield return OptimizeRotationAroundPoint(alignmentCameraPose, photo, true, 60);
         yield return OptimizeLocalPosition(alignmentCameraPose, photo, true, true, 18, 3);
         yield return OptimizeLocalPosition(alignmentCameraPose, photo, false);
-
-
+        yield return OptimizeLocalPosition(alignmentCameraPose, photo, true);
+        yield return OptimizeLocalPosition(alignmentCameraPose, photo, false,false,5,1);
         alignmentCameraPose = _bestPose?.pose ?? alignmentCameraPose;
         localIterCnt = 0;
         globalIterCnt = 0;
@@ -630,20 +785,20 @@ public class CameraAlignmentManager : MonoBehaviour
         Debugger.HideProgressBar("Position Refinement");
         Debugger.HideProgressBar("Localization 3/4");
         Debugger.DisplayProgressBar("Localization 4/4", () => 3 + globalIterCnt / 70f, 4);
+        yield return null;
         Debugger.DisplayProgressBar("Final Optimization", () => globalIterCnt, 70);
         
         Debugger.Log("Pose refined. Score: " + Math.Round(SimilarityScoreEstimator.maxScore, 2) + $"; Took {Time.time - _efficiencyStartTime} seconds.", Debugger.MsgType.Info);
 
-
         yield return OptimizePose(alignmentCameraPose, photo, 70);
         alignmentCameraPose = _bestPose?.pose ?? alignmentCameraPose;
-        yield return OptimizeLocalPosition(alignmentCameraPose, photo, true, true, 20, 2);
+        //yield return OptimizeLocalPosition(alignmentCameraPose, photo, true, true, 20, 2);
 
         Debugger.HideProgressBar("Localization 4/4");
         Debugger.HideProgressBar("Final Optimization");
 
 
-        alignmentCameraPose = _bestPose?.pose ?? alignmentCameraPose;
+      //  alignmentCameraPose = _bestPose?.pose ?? alignmentCameraPose;
         similarity = _bestPose?.score ?? 0;
         PoseScore.ResetBestPose();
         _bestPose = null;
@@ -657,30 +812,37 @@ public class CameraAlignmentManager : MonoBehaviour
         RestoreCesiumCameras();
         AlignmentCameraDisable();
 
-        Vector3 newOffset = _alignmentCameraPose.position - basePose.position;
-        float rotationOffset = _alignmentCameraPose.ry - basePose.ry;
 
-        if (hasPrevPose)
-        {
-            rotationOffset += prevPose.ry;
-            newOffset = newOffset + prevPose.position;
-        }
+        Vector3 deltaPosition = -poseBeforeAlignment.position + _alignmentCameraPose.position - AlignmentManager._pureJoystickOffsetMeters; 
+        float deltaRotation = Mathf.DeltaAngle(poseBeforeAlignment.ry, _alignmentCameraPose.ry) - AlignmentManager._rotationOffset;
+        Vector3 newOffset = deltaPosition;
+        Quaternion rotationOffset = Quaternion.Euler(0, deltaRotation, 0);
 
-        hasPrevPose = true;
-        prevPose = new CameraPose(newOffset, Quaternion.Euler(0, rotationOffset, 0));
+        isAlined = true;
 
+        Debug.Log($"Delta: p({deltaPosition.x}; {deltaPosition.z}) = A {_alignmentCameraPose.ToString()} -  befA {poseBeforeAlignment.ToString()}");
 
         _efficiency = Time.time - _efficiencyStartTime;
+
         Debugger.Log($"Alignment completed. Similarity Score: {Math.Round(SimilarityScoreEstimator.maxScore,2)}; Took {_efficiency} seconds.", Debugger.MsgType.Success);
         StopFPSCalculation(); 
         _checkCesiumLoading = false;
-
+        ClearAdditionalViews();
         SimilarityScoreEstimator._Reset();
         ClearDisplayImage(displayPhotoTexture);
         ClearDisplayImage(displayRenderTexture);
-        isAlignmentStarted = false;  
-        callback(new CameraPose(newOffset, Quaternion.Euler(0, rotationOffset, 0)));
+        isAlignmentStarted = false;
         PoseScore.ResetBestPose();
+
+        CameraPose finalOffset = new CameraPose(newOffset, Quaternion.Euler(0, rotationOffset.eulerAngles.y, 0));
+
+        //Debug.Log($"Final offset to apply to all additional poses: {finalOffset.ToString()}");
+
+        //Debug.Log("Final alignmentCameraPose: " + _alignmentCameraPose.ToString() + "\n Main Pose" + poseBeforeAlignment.ToString() + "\nOffset: " + newOffset + rotationOffset);
+        AlignmentManager._rotationOffset = 0;
+        AlignmentManager._pureJoystickOffsetMeters = Vector3.zero;
+        AdditionalPose.SetNewPoseToMain(alignmentCameraPose);
+        callback(finalOffset);
     }
 
     public void DisplayPhoto(byte[] photo)
@@ -719,15 +881,16 @@ public class CameraAlignmentManager : MonoBehaviour
 
             alignmentCameraPose = candidatePose;
 
-            double score = SimilarityScoreEstimator.GetSimilarityScore(context.photoSeg, segmentRender(true, false));
-
+            double score = GetAdditionalPosesScore(alignmentCameraPose, photoSeg, false).Item2;
             var currentPoseScore = new PoseScore(candidatePose, score);
             context.RegisterEvaluation(false);
 
-            if (IsBestPose(currentPoseScore, bestPose, photoSeg)) { bestPose = currentPoseScore; }
+            if (IsBestPose(currentPoseScore, bestPose, photoSeg)) { bestPose = currentPoseScore;}
 
             yield return null;
         }
+
+        yield return null;
 
         if (bestPose == null) yield break;
 
@@ -828,7 +991,7 @@ public class CameraAlignmentManager : MonoBehaviour
             maxStagnationLevels = 1
         };
 
-        PoseScore initPoseScore = new PoseScore(initialPose, SimilarityScoreEstimator.GetSimilarityScore(photoSeg, segmentRender(true, true)));
+        PoseScore initPoseScore = new PoseScore(initialPose, SimilarityScoreEstimator.GetSimilarityScore(photoSeg, segmentRender(false, true)));
 
         Debugger.DisplayProgressBar("Localization 1/4", () => (float)context.similarityEvaluations / (float)context.maxEvaluations, 4);
 
@@ -865,7 +1028,7 @@ public class CameraAlignmentManager : MonoBehaviour
 
         return false;
     }
-    public bool TryGetOutFromBuilding(CameraPose cameraPosition, out CameraPose newPosition)
+    public bool TryGetOutFromBuilding(CameraPose cameraPosition, out CameraPose newPosition, bool leftRight = false, bool back = false)
     {
         newPosition = cameraPosition;
 
@@ -878,7 +1041,34 @@ public class CameraAlignmentManager : MonoBehaviour
         if (Physics.Raycast(rayOrigin, directionToCamera, out RaycastHit hit, 20f, 1 << BUILDING_LAYER, QueryTriggerInteraction.Ignore))
         {
             newPosition = new CameraPose(hit.point - directionToCamera * 4f, cameraPosition.rotation);
-            return true; //IsInsideBuilding(newPosition.position);
+            return IsInsideBuilding(newPosition.position);
+        }
+        if (leftRight)
+        {
+            Vector3 cameraRight = cameraPosition.rotation * Vector3.right * 2;
+            Vector3 rightPosition = cameraPosition.position + cameraRight;
+
+            Vector3 leftPosition = cameraPosition.position - cameraRight;
+            if (!IsInsideBuilding(leftPosition))
+            {
+                newPosition = new CameraPose(leftPosition, cameraPosition.rotation);
+                return true;
+            }
+
+            newPosition = new CameraPose(rightPosition, cameraPosition.rotation);
+            if (!IsInsideBuilding(rightPosition))
+            {
+                return true;
+            }
+        }
+        if (back)
+        {
+            Vector3 backPosition = cameraPosition.position - cameraForward.normalized * 3f;
+            newPosition = new CameraPose(backPosition, cameraPosition.rotation);
+            if (!IsInsideBuilding(backPosition))
+            {   
+                return true;
+            }
         }
 
         return false;
@@ -888,14 +1078,39 @@ public class CameraAlignmentManager : MonoBehaviour
     void SetVisualisationCamerasPosition()
     {
         visualizationCamera.transform.SetPositionAndRotation(visualsationCameraPose.position, visualsationCameraPose.rotation);
-        cesiumLoadingCamera.transform.SetPositionAndRotation(visualsationCameraPose.position, visualsationCameraPose.rotation);
+        cesiumLoadingCamera.transform.SetPositionAndRotation(visualsationCameraPose.position, Quaternion.Euler(0, visualsationCameraPose.rotation.eulerAngles.y, 0));
+        backCesiumLoadingCamera.transform.SetPositionAndRotation(visualsationCameraPose.position, Quaternion.Euler(0, visualsationCameraPose.rotation.eulerAngles.y + 180f, 0));
     }
     void SetAlignmentCamerasPosition()
     {
-        virtualSegmentationCamera.transform.SetPositionAndRotation(alignmentCameraPose.position, alignmentCameraPose.rotation);
-        alignmentCamera.transform.SetPositionAndRotation(alignmentCameraPose.position, alignmentCameraPose.rotation);
+        Vector3 position =  AdjustAltitudeByRaycast(alignmentCameraPose.position);
+        virtualSegmentationCamera.transform.SetPositionAndRotation(position, alignmentCameraPose.rotation);
+        alignmentCamera.transform.SetPositionAndRotation(position, alignmentCameraPose.rotation);
+        for (int i = 0, j = 0; i < AdditionalPose.additionalPoses.Count; i++)
+        {
+            if (i == AdditionalPose._mainPoseId) continue;
+            var p = AdditionalPose.additionalPoses[i].ApplyToAlignedMain(alignmentCameraPose);
+            //Debug.Log($"Main Y: {alignmentCameraPose.rotation.eulerAngles.y:F1}; " + $"Additional Y: {p.rotation.eulerAngles.y:F1}; " +$"Camera Y before: " +$"{AdditionalViewCameras[j].transform.eulerAngles.y:F1}");
+            AdditionalViewCameras[j].transform.SetPositionAndRotation(p.p, p.r);
+            //Debug.Log(    $"Camera Y after: " +    $"{AdditionalViewCameras[j].transform.eulerAngles.y:F1}");
+            j++;
+
+        }
+
     }
 
+    public Vector3 AdjustAltitudeByRaycast(Vector3 position, float heightAboveGround = 1.65f)
+    {
+        Vector3 rayOrigin = new Vector3(position.x, 100, position.z);
+        Ray ray = new Ray(rayOrigin, Vector3.down);
+
+        if (Physics.Raycast(ray, out RaycastHit hit, 100 * 2f, (1 << GROUND_LAYER | 1 << RIVER_LAYER)))
+        {
+            position.y = hit.point.y + heightAboveGround;
+        }
+
+        return position;
+    }
     void DrawByte512x512(byte[] pixels, Texture2D texture)
     {
         if (!enableDisplay)
@@ -968,16 +1183,20 @@ public class CameraAlignmentManager : MonoBehaviour
 
     int cMask = 0;
     bool disabled = false;
+
     public void ToggleCityVisualisation()
     {
+        
         if (disabled)
-            ARCamera.cullingMask = cMask;
-        else
         {
-            cMask = ARCamera.cullingMask;
             ARCamera.cullingMask = 0;
         }
+        else
+        {
+            ARCamera.cullingMask = cMask;
+        }
         disabled = !disabled;
+
     }
 
     private byte[] segmentImage(Camera camera)
@@ -1049,13 +1268,17 @@ public class CameraAlignmentManager : MonoBehaviour
             else
                 classMap[i] = 2;
         }
-        DrawByte512x512(classMap, displayRenderTexture);
+        if (useSegmentation && false)
+            DrawByte512x512(classMap, displayRenderTexture);
         return classMap;
     }
 
     private void SpawnCameras()
     {
-        CreateCesiumLoadingCamera();
+        cesiumLoadingCamera = CreateCesiumLoadingCamera("CesiumLoadingCamera");
+        backCesiumLoadingCamera = CreateCesiumLoadingCamera("BackCesiumLoadingCamera", 60);
+       
+
         visualizationCamera = SpawnCamera("VisualizationCamera");
         virtualSegmentationCamera = SpawnCamera("VirtualSegmentationCamera");
 
@@ -1108,30 +1331,26 @@ public class CameraAlignmentManager : MonoBehaviour
         return cam;
     }
 
-    private void CreateCesiumLoadingCamera()
+    private Camera CreateCesiumLoadingCamera(string name, float fieldOfView = 170f)
     {
-        GameObject obj = new GameObject("CesiumLoadingCamera");
-        cesiumLoadingCamera = obj.AddComponent<Camera>();
-        cesiumLoadingCamera.fieldOfView = 130f;
-        cesiumLoadingCamera.nearClipPlane = 0.03f;
-        cesiumLoadingCamera.farClipPlane = 300f;
-        cesiumLoadingCamera.enabled = false;
-        cesiumLoadingCamera.cullingMask = 0;
+        GameObject obj = new GameObject(name);
+        Camera camera = obj.AddComponent<Camera>();
+        camera.fieldOfView = fieldOfView;
+        camera.nearClipPlane = 0.03f;
+        camera.farClipPlane = 150f;
+        camera.enabled = false;
+        camera.cullingMask = 0;
+        return camera;
     }
 
 
     private CameraPose GetNewCameraPosition() =>
-        new CameraPose(
-           ARCamera.transform.position,
-            Quaternion.Euler(ARCamera.transform.rotation.eulerAngles.x, ARCamera.transform.rotation.eulerAngles.y, ARCamera.transform.rotation.eulerAngles.z)
-        );
+        AdditionalPose.mainPose;
+        //new CameraPose(ARCamera.transform.position, Quaternion.Euler(ARCamera.transform.rotation.eulerAngles.x, ARCamera.transform.rotation.eulerAngles.y, ARCamera.transform.rotation.eulerAngles.z));
 
 
     private void AlignmentCameraEnable()
     {
-        basePose = GetNewCameraPosition();
-        alignmentCameraPose = basePose;
-        visualsationCameraPose = basePose;
         followAlignmentCamera = true;
         visualizationCamera.enabled = true;
         ARCamera.enabled = false;
@@ -1146,6 +1365,7 @@ public class CameraAlignmentManager : MonoBehaviour
         ARCamera.depth = 1;
     }
 
+    List<Camera> AdditionalViewCameras = new List<Camera>();
     private void UseAlignmentCameraForCesium()
     {
         previousUseMainCamera = cesiumCameraManager.useMainCamera;
@@ -1153,7 +1373,16 @@ public class CameraAlignmentManager : MonoBehaviour
         cesiumCameraManager.useMainCamera = false;
         cesiumCameraManager.additionalCameras.Clear();
         cesiumCameraManager.additionalCameras.Add(cesiumLoadingCamera);
+        cesiumCameraManager.additionalCameras.Add(backCesiumLoadingCamera);
+        for (int i = 0; i < AdditionalPose.additionalPoses.Count; i++)
+        {
+            if (i == AdditionalPose._mainPoseId) continue;
+            var additionalCamera = CreateCesiumLoadingCamera($"AdditionalViewCamera_{i}", 60);
+            AdditionalViewCameras.Add(additionalCamera);
+            cesiumCameraManager.additionalCameras.Add(additionalCamera);
+        }
     }
+
 
     private void RestoreCesiumCameras()
     {
@@ -1161,6 +1390,13 @@ public class CameraAlignmentManager : MonoBehaviour
 
         cesiumCameraManager.additionalCameras.Clear();
         cesiumCameraManager.additionalCameras.AddRange(previousAdditionalCameras);
+        foreach (var cam in AdditionalViewCameras)
+        {
+            if (cam != null)
+                Destroy(cam.gameObject);
+        }
+
+        AdditionalViewCameras.Clear();
     }
 
     public static CameraPose LocalToWorldOffset(CameraPose referencePose, Vector3 localOffset)
@@ -1232,28 +1468,36 @@ public class CameraAlignmentManager : MonoBehaviour
     public float groundRatio = 0;
     public float buildingRatio = 0;
 
-    public IEnumerator CalculateRatios(byte[] photo)
+    public void CalculateRatios()
     {
-        int sky = 0, ground = 0, building = 0, obstacles = 0;
-
-        for (int i = 0; i < photo.Length; i++)
+        if (AdditionalPose.additionalPoses.Count == 0)
+            return;
+        skyRatio = 0; groundRatio = 0; buildingRatio = 0; obstaclesRatio = 0;
+        for (int j = 0; j < AdditionalPose.additionalPoses.Count; j++)
         {
-            switch (photo[i])
+            int sky = 0, ground = 0, building = 0, obstacles = 0;
+
+            byte[] photo = AdditionalPose.additionalPoses[j].photo;
+            for (int i = 0; i < photo.Length; i++)
             {
-                case 0: obstacles++; break;
-                case 1: ground++; break;
-                case 2: sky++; break;
-                default: building++; break;
+                switch (photo[i])
+                {
+                    case 0: obstacles++; break;
+                    case 1: ground++; break;
+                    case 2: sky++; break;
+                    default: building++; break;
+                }
             }
 
-            if (i % 512 == 0)
-                yield return null;
+            float total = photo.Length;
+            skyRatio += sky / total;
+            groundRatio += ground / total;
+            buildingRatio += building / total;
+            obstaclesRatio += obstacles / total;
         }
-
-        float total = photo.Length;
-        skyRatio = sky / total;
-        groundRatio = ground / total;
-        buildingRatio = building / total;
-        obstaclesRatio = obstacles / total;
+        skyRatio /= AdditionalPose.additionalPoses.Count;
+        groundRatio /= AdditionalPose.additionalPoses.Count;
+        buildingRatio /= AdditionalPose.additionalPoses.Count;
+        obstaclesRatio /= AdditionalPose.additionalPoses.Count;
     }
 }

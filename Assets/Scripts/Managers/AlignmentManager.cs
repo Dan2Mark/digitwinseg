@@ -1,13 +1,10 @@
 using CesiumForUnity;
 using System;
 using System.Collections;
-using System.Collections.Generic;
-using System.Linq;
 using UnityEngine;
 using UnityEngine.InputSystem;
-using UnityEngine.UIElements.Experimental;
 
-public class AllignmentManager : MonoBehaviour
+public class AlignmentManager : MonoBehaviour
 {
 
     [Header("AR Camera & Origin")]
@@ -41,15 +38,16 @@ public class AllignmentManager : MonoBehaviour
     [SerializeField] public LocationManager _LocationManager;
     [SerializeField] public GPSConnector _GPSConnector;
     [SerializeField] public CameraAlignmentManager _cameraAlignmentManager;
+    [SerializeField] static public CameraAlignmentManager.CameraPose OffsetWithoutGPS = new CameraAlignmentManager.CameraPose(Vector3.zero, Quaternion.identity);
     
 
-    private Vector3 _pureJoystickOffsetMeters = Vector3.zero;
+    static public Vector3 _pureJoystickOffsetMeters = Vector3.zero;
     private float _buttonRotationDirection = 0f;
-    private float rotationMutiplier = 0.01f;
+    private float rotationMutiplier = 0.0005f;
     private bool isRotatesManually = false;
-    private float _rotationOffset = 0f;
+    static public float _rotationOffset = 0f;
     private float _capturedCompassHeading = 0f;
-    private CameraAlignmentManager.CameraPose _cameraAlignmentOffset = new CameraAlignmentManager.CameraPose(Vector3.zero, new Quaternion(0,0,0,0));
+    private CameraAlignmentManager.CameraPose _cameraAlignmentOffset = new CameraAlignmentManager.CameraPose(Vector3.zero, Quaternion.identity);
 
     private float _efficiency;
     private double similarity = 0;
@@ -207,26 +205,42 @@ public class AllignmentManager : MonoBehaviour
             yield return new WaitForSeconds(1);
         }
         similarity = _cameraAlignmentManager.getSimilarity();
-
-        //yield return CameraAlignment();
+        _cameraAlignmentManager.ClearDisplayImages();
+        yield return CameraAlignment();
     }
 
     public void AlignWithCamera()
     {
         StartCoroutine(CameraAlignment());
     }
+
+    /// //////////////////////////////////////////////////////////
+    
     public IEnumerator CameraAlignment()
     {
         bool isAligned = false;
         StartCoroutine(_cameraAlignmentManager.Align(callback =>
         {
-            _cameraAlignmentOffset = callback;
+            Quaternion newRotation = Quaternion.Euler(0, callback.ry + _cameraAlignmentOffset.ry, 0);
+
+            _cameraAlignmentOffset = new CameraAlignmentManager.CameraPose(callback.position,newRotation);
             setPosition();
             setRotation();
             isAligned = true;
         }));
+
         yield return new WaitUntil(() => isAligned);
-    } 
+        yield return WaitCesiumLoading();
+        setPosition();
+
+        DTAheading = _cameraAlignmentOffset.ry;
+    }
+    public IEnumerator BackgroundCameraAlignment()
+    {
+        //TODO
+        yield return null;      
+    }
+    string T2S(Transform t) => new CameraAlignmentManager.CameraPose(t.position, t.rotation).ToString();
 
     public void StartRotateLeft()
     {
@@ -249,13 +263,15 @@ public class AllignmentManager : MonoBehaviour
     private void _Reset()
     {
         StopAllCoroutines();
-        _cameraAlignmentOffset.position = Vector3.zero;
+        _cameraAlignmentOffset = new CameraAlignmentManager.CameraPose(Vector3.zero, Quaternion.identity);
         _evaluationManager.ResetMetrics();
         _capturedCompassHeading = 0f;
         _currentCords = null;
         _rotationOffset = 0f;
         _pureJoystickOffsetMeters = Vector3.zero;
         _cameraAlignmentManager._Reset();
+        setPosition();
+        setRotation();
     }
     public void ResetPosition()
     {
@@ -278,9 +294,13 @@ public class AllignmentManager : MonoBehaviour
 
         DateTime now = DateTime.Now;
         int placeId = HashCode.Combine(now.Date, now.Hour, now.Minute);
-       
+
+        float DTAheadingError = Math.Abs(_rotationOffset);
+
         float realHeading = _capturedCompassHeading + DTAheading - _rotationOffset;
-        _evaluationManager.AcceptPosition(placeId, realCords, _currentCords, DTACords, realHeading, _capturedCompassHeading, DTAheading, _efficiency, _cameraAlignmentManager.efficiency, FPS, CameraAlignmentManager.FPS, (float)SimilarityScoreEstimator.NormalizeSimilarity(similarity), (float)SimilarityScoreEstimator.NormalizeSimilarity(_cameraAlignmentManager.similarity), _cameraAlignmentManager.obstaclesRatio, _cameraAlignmentManager.skyRatio, _cameraAlignmentManager.buildingRatio, _cameraAlignmentManager.groundRatio);
+        Debugger.Log($"Real: {realHeading} = {_capturedCompassHeading} + {DTAheading} - {_rotationOffset}");
+        Debugger.Log($"Data2Save: DTAheading: {DTAheading}");
+        _evaluationManager.AcceptPosition(placeId, realCords, _currentCords, DTACords, realHeading, _capturedCompassHeading, DTAheadingError, _efficiency, _cameraAlignmentManager.efficiency, FPS, CameraAlignmentManager.FPS, (float)SimilarityScoreEstimator.NormalizeSimilarity(similarity), (float)SimilarityScoreEstimator.NormalizeSimilarity(_cameraAlignmentManager.similarity), _cameraAlignmentManager.obstaclesRatio, _cameraAlignmentManager.skyRatio, _cameraAlignmentManager.buildingRatio, _cameraAlignmentManager.groundRatio, MultipleViewManager.AdditionalPose.additionalPoses.Count);
         //StartCoroutine(_LocationManager.MultipleMeasuresGPSAccuracy(realCords, 9, realHeading, _capturedCompassHeading));
     }
 
@@ -289,18 +309,20 @@ public class AllignmentManager : MonoBehaviour
     {
         Debugger.Log("Dummy Mode activated: " + reason, type);
         _currentCords = new GPSConnector.Cords(_dummyLat, _dummyLon, 0);
+
+        _capturedCompassHeading = 30f;
         MoveCityToCords(_currentCords);
+        setRotation();
     }
-    /*
-    IEnumerator RaycastLoopRoutine() { while (true) { AdjustAltitudeByRaycast(); yield return new WaitForSeconds(1f); } }
+    
+    IEnumerator RaycastLoopRoutine() { while (true) { setPosition(); yield return new WaitForSeconds(2f); } }
 
     private Coroutine _raycastCoroutine;
     void OnEnable() { if (_alignToGround) _raycastCoroutine = StartCoroutine(RaycastLoopRoutine()); }
-    void OnDisable() { if (_raycastCoroutine != null) StopCoroutine(_raycastCoroutine); }
-*/   
+    void OnDisable() { if (_raycastCoroutine != null) StopCoroutine(_raycastCoroutine); } 
     private Vector3 AdjustAltitudeByRaycast(Vector3 position)
     {
-        Vector3 rayOrigin = new Vector3(position.x, _arCameraTransform.position.y + _raycastStartHeight, position.z);
+        Vector3 rayOrigin = new Vector3(position.x, _raycastStartHeight, position.z);
         Ray ray = new Ray(rayOrigin, Vector3.down);
         RaycastHit hit;
         if (Physics.Raycast(ray, out hit, _raycastStartHeight * 2, _groundLayerMask))
@@ -308,22 +330,26 @@ public class AllignmentManager : MonoBehaviour
             float currentCameraHeightRelativeToRig = _arCameraTransform.position.y - _positionOffsetTransform.position.y;
             float targetRigY = hit.point.y - (-_cameraHeightAboveGround - currentCameraHeightRelativeToRig);
 
-            position.y = targetRigY + _cameraAlignmentOffset.position.y;
+            position.y = targetRigY;
         }
         return position;
     }
     private void setPosition()
     {
-        var newPosition = _cityPosition - _pureJoystickOffsetMeters + _cameraAlignmentOffset.position;
+        OffsetWithoutGPS.position = _cameraAlignmentOffset.position - _pureJoystickOffsetMeters;
+        var newPosition = _cityPosition  + OffsetWithoutGPS.position;
         _positionOffsetTransform.position = AdjustAltitudeByRaycast(newPosition);
+        // Debugger.Log("After Set Position: " + T2S(_positionOffsetTransform) + "\nCompass  " + _capturedCompassHeading + "\n AR Camera: " + T2S(_arCameraTransform) + "\npositionOffsetTransform: " + _positionOffsetTransform.position.ToString());
         Debugger.DisplayVar("Inside Building", _cameraAlignmentManager.IsInsideBuilding(_positionOffsetTransform.position).ToString());
+
+        //Debugger.DisplayVar("Joy", () => $"({_pureJoystickOffsetMeters.x};{_pureJoystickOffsetMeters.z});{_rotationOffset}");
     }
     private void setRotation()
     {
-        float angle = _capturedCompassHeading - _rotationOffset + _arCameraTransform.rotation.y + _cameraAlignmentOffset.ry;
-        DTAheading = _cameraAlignmentOffset.ry;
-        Quaternion rot = Quaternion.Euler(0f, angle, 0f);
-        _rotationOffsetTransform.rotation = rot;
+        float angleWGPS = _cameraAlignmentOffset.ry - _rotationOffset;
+        OffsetWithoutGPS = new CameraAlignmentManager.CameraPose(OffsetWithoutGPS.p,Quaternion.Euler(0,angleWGPS,0));
+        float angle = _capturedCompassHeading + OffsetWithoutGPS.ry; 
+        _rotationOffsetTransform.rotation = Quaternion.Euler(0f, angle, 0f);
     }
 
     private void MoveCityToCords(GPSConnector.Cords cords)
